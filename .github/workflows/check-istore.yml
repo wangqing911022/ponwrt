@@ -1,0 +1,41 @@
+name: Check iStore config
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Check feeds
+        run: |
+          echo "=== feeds.conf.default ==="
+          cat feeds.conf.default
+          echo "=== istore feed dir ==="
+          ls -la feeds/istore || true
+          echo "=== istore feed index ==="
+          head -100 feeds/istore.index 2>/dev/null || true
+          echo "=== installed istore packages ==="
+          ls -la package/feeds/istore 2>/dev/null || true
+          echo "=== feeds list ==="
+          ./scripts/feeds list -r istore 2>&1 | head -100 || true
+
+      - name: Check config
+        run: |
+          ./scripts/kconfig.pl + configs/an7581.config configs/release.config > .config
+          make defconfig
+          echo "=== selected symbols ==="
+          grep -nE 'CONFIG_PACKAGE_(luci-app-store|luci-compat|luci-lib-taskd|luci-lib-xterm|taskd|curl|libuci-lua)' .config || true
+          echo "=== generated kconfig ==="
+          grep -n -A30 'config PACKAGE_luci-app-store' tmp/.config-package.in 2>/dev/null || true
