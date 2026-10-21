@@ -1,0 +1,8 @@
+#!/bin/sh
+# Force Argon as the default LuCI theme on first boot of this firmware.
+# This also works when an existing config backup already has luci.themes.Argon.
+[ -d /www/luci-static/argon ] || exit 0
+uci -q set luci.themes.Argon=/luci-static/argon
+uci -q set luci.main.mediaurlbase=/luci-static/argon
+uci -q commit luci
+exit 0
