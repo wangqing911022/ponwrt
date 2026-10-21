@@ -106,7 +106,7 @@ jobs:
           done
           test -f package/custom/luci-theme-argon/Makefile
           test -f package/custom/luci-app-argon-config/Makefile
-          test -d package/feeds/openclash/luci-app-openclash
+          test -d package/feeds/openclash/luci-app-openclash || test -d package/feeds/luci/luci-app-openclash
           test -d package/feeds/istore/luci-app-store
 
       - name: Download sources
