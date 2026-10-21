@@ -69,6 +69,15 @@ jobs:
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
+          # Replace the luci feed builds of Argon with the iStoreOS flavours.
+          # The jjm2473 repos are single-package repos: when used as feeds their
+          # root Makefile would derive the wrong package name from the feed dir,
+          # so check them out under package/custom with the correct names.
+          rm -rf package/feeds/luci/luci-theme-argon package/feeds/luci/luci-app-argon-config
+          rm -rf package/feeds/istoreos_theme package/feeds/istoreos_argon
+          mkdir -p package/custom
+          git clone --depth 1 -b luci-24 https://github.com/jjm2473/luci-theme-argon.git package/custom/luci-theme-argon
+          git clone --depth 1 -b dev https://github.com/jjm2473/luci-app-argon-config.git package/custom/luci-app-argon-config
 
       - name: Load repository signing key
         env:
@@ -86,6 +95,19 @@ jobs:
             "configs/${{ matrix.target }}.config" \
             configs/release.config > .config
           make defconfig
+
+      - name: Verify required packages
+        run: |
+          for pkg in luci-app-store luci-app-openclash luci-theme-argon luci-app-argon-config; do
+            grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config || { echo "ERROR: ${pkg} is not selected"; exit 1; }
+          done
+          for dep in dnsmasq-full bash curl ca-bundle ip-full ruby ruby-yaml kmod-tun unzip luci-compat xz-utils; do
+            grep -q "^CONFIG_PACKAGE_${dep}=y$" .config || { echo "ERROR: dependency ${dep} is not selected"; exit 1; }
+          done
+          test -f package/custom/luci-theme-argon/Makefile
+          test -f package/custom/luci-app-argon-config/Makefile
+          test -d package/feeds/openclash/luci-app-openclash
+          test -d package/feeds/istore/luci-app-store
 
       - name: Download sources
         run: make download -j"$(nproc)"
