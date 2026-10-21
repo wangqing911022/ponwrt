@@ -1,0 +1,30 @@
+name: Check iStore config
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install feeds
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Check config
+        run: |
+          ./scripts/kconfig.pl + configs/an7581.config configs/release.config > .config
+          make defconfig
+          echo "=== selected symbols ==="
+          grep -nE 'CONFIG_PACKAGE_(luci-app-store|luci-compat|luci-lib-taskd|luci-lib-xterm|taskd|curl|libuci-lua|i2c-tools|libi2c|python3)=y' .config || true
+          echo "=== disabled symbols ==="
+          grep -nE '# CONFIG_PACKAGE_(i2c-tools|libi2c|python3) is not set' .config || true
+          echo "=== all python3 lines ==="
+          grep -nE 'PACKAGE_python3' .config || true
