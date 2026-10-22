@@ -1,0 +1,7 @@
+#!/bin/sh
+# Force Aurora as the default LuCI theme on first boot of this firmware.
+[ -d /www/luci-static/aurora ] || exit 0
+uci -q set luci.themes.Aurora=/luci-static/aurora
+uci -q set luci.main.mediaurlbase=/luci-static/aurora
+uci -q commit luci
+exit 0
