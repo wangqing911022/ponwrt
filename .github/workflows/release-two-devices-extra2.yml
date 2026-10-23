@@ -1,0 +1,196 @@
+﻿name: Release Two Devices Extra2
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        type: string
+      prerelease:
+        description: Mark as prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build an7581
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    environment: release
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
+            gettext git g++-multilib gcc-multilib gperf help2man intltool \
+            libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+            libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+            libtool libyaml-dev lld llvm ninja-build p7zip-full patch pkgconf \
+            python3 python3-docutils python3-pip python3-ply python3-pyelftools \
+            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: ponwrt-dl-an7581-extra-${{ hashFiles('configs/*.config', 'configs/*.conf') }}
+          restore-keys: |
+            ponwrt-dl-an7581-
+
+      - name: Install feeds
+        run: |
+          cp configs/feeds.aurora-passwall.conf feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+          rm -rf package/feeds/luci/luci-theme-argon package/feeds/luci/luci-app-argon-config
+          rm -rf package/feeds/luci/luci-theme-aurora package/feeds/luci/luci-app-aurora-config
+          rm -rf package/feeds/luci/luci-theme-alpha package/feeds/luci/luci-app-alpha-config
+          rm -rf package/feeds/luci/luci-app-airoha-npu package/feeds/luci/luci-app-netspeedtest
+          rm -rf package/feeds/luci/luci-app-passwall
+          rm -rf package/feeds/istoreos_theme package/feeds/istoreos_argon
+          mkdir -p package/custom
+          git clone --depth 1 -b master https://github.com/jerrykuku/luci-theme-argon.git package/custom/luci-theme-argon
+          git clone --depth 1 -b master https://github.com/eamonxg/luci-theme-aurora.git package/custom/luci-theme-aurora
+          git clone --depth 1 -b master https://github.com/eamonxg/luci-app-aurora-config.git package/custom/luci-app-aurora-config
+          git clone --depth 1 -b main https://github.com/luanmuc/luci-app-airoha-npu.git package/custom/luci-app-airoha-npu
+          git clone --depth 1 -b master https://github.com/muink/luci-app-netspeedtest.git package/custom/luci-app-netspeedtest
+          sed -i '1i PKG_VERSION:=5.0.0' package/custom/luci-app-netspeedtest/Makefile
+          git clone --depth 1 -b master https://github.com/derisamedia/luci-theme-alpha.git package/custom/luci-theme-alpha
+          git clone --depth 1 -b master https://github.com/animegasan/luci-app-alpha-config.git package/custom/luci-app-alpha-config
+          chmod 0755 package/base-files/files/etc/uci-defaults/99-argon-default
+          chmod 0755 package/base-files/files/etc/uci-defaults/99-aurora-default
+
+      - name: Load repository signing key
+        env:
+          PONWRT_APK_PRIVATE_KEY: ${{ secrets.PONWRT_APK_PRIVATE_KEY }}
+        run: |
+          if [ -n "$PONWRT_APK_PRIVATE_KEY" ]; then
+            umask 077
+            printf '%s\n' "$PONWRT_APK_PRIVATE_KEY" > private-key.pem
+            openssl ec -in private-key.pem -pubout -out public-key.pem
+          fi
+
+      - name: Configure an7581 (two devices, extra apps)
+        run: |
+          ./scripts/kconfig.pl + \
+            "configs/an7581.config" \
+            configs/release.two-devices-extra.config > .config
+          ./scripts/kconfig.pl + .config configs/two-devices.config > .config.new
+          mv .config.new .config
+          make defconfig
+
+      - name: Verify required packages and devices
+        run: |
+          set -e
+          for pkg in luci-app-store luci-app-openclash luci-theme-argon luci-theme-aurora luci-app-aurora-config \
+            luci-app-passwall luci-app-airoha-npu luci-i18n-airoha-npu-zh-cn luci-app-netspeedtest \
+            luci-theme-alpha luci-app-alpha-config; do
+            grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config || { echo "ERROR: ${pkg} is not selected"; exit 1; }
+          done
+          for dep in dnsmasq-full bash curl ca-bundle ip-full ruby ruby-yaml kmod-tun unzip luci-compat xz-utils \
+            flock coreutils-timeout ucode-mod-math \
+            chinadns-ng dns2socks microsocks tcping lyaml lua libuci-lua luci-lib-jsonc \
+            coreutils-base64 coreutils-nohup resolveip iperf3 librespeed-go ca-certificates; do
+            grep -q "^CONFIG_PACKAGE_${dep}=y$" .config || { echo "ERROR: dependency ${dep} is not selected"; exit 1; }
+          done
+          grep -q '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y$' .config
+          grep -q '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn504xg-d=y$' .config
+          count=$(grep -c '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y$' .config || true)
+          [ "$count" -eq 2 ] || { echo "ERROR: expected 2 devices, got $count"; grep '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y$' .config; exit 1; }
+          test -f package/custom/luci-theme-argon/Makefile
+          grep -q '^PKG_VERSION:=3\.' package/custom/luci-theme-argon/Makefile
+          test -f package/custom/luci-theme-aurora/Makefile
+          grep -q '^PKG_VERSION:=1\.' package/custom/luci-theme-aurora/Makefile
+          test -f package/custom/luci-app-aurora-config/Makefile
+          test -f package/custom/luci-app-airoha-npu/Makefile
+          grep -q '^PKG_VERSION:=1\.' package/custom/luci-app-airoha-npu/Makefile
+          test -f package/custom/luci-app-netspeedtest/Makefile
+          test -f package/custom/luci-theme-alpha/Makefile
+          test -f package/custom/luci-app-alpha-config/Makefile
+          test -d package/feeds/passwall_luci/luci-app-passwall
+          test -d package/feeds/passwall_packages/chinadns-ng
+          test -d package/feeds/istore/luci-app-store
+          test -f package/base-files/files/etc/uci-defaults/99-aurora-default
+
+      - name: Download sources
+        run: make download -j"$(nproc)"
+
+      - name: Build an7581
+        run: make -j"$(nproc)"
+
+      - name: Pack an7581
+        run: |
+          mkdir release
+          tar --zstd -cf "release/ponwrt-an7581.tar.zst" \
+            -C bin/targets/airoha an7581
+
+      - name: Upload an7581
+        uses: actions/upload-artifact@v4
+        with:
+          name: ponwrt-an7581
+          path: release/*.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download firmware archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ponwrt-*
+          path: release
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: release
+        run: sha256sum *.tar.zst > sha256sums
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          args=(
+            "$RELEASE_TAG"
+            release/*.tar.zst
+            release/sha256sums
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "PonWrt $RELEASE_TAG"
+            --generate-notes
+          )
+          if [ "$PRERELEASE" = true ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"
+
+
