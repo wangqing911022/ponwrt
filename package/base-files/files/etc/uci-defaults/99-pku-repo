@@ -1,0 +1,14 @@
+#!/bin/sh
+# Use the Peking University mirror for ImmortalWrt snapshot packages.
+BASE="https://mirrors.pku.edu.cn/immortalwrt/snapshots"
+mkdir -p /etc/apk/repositories.d
+cat > /etc/apk/repositories.d/distfeeds.list <<EOF
+# PKU mirror for ImmortalWrt snapshots (mainland China)
+$BASE/targets/airoha/an7581/packages/packages.adb
+$BASE/packages/aarch64_cortex-a53/base/packages.adb
+$BASE/packages/aarch64_cortex-a53/packages/packages.adb
+$BASE/packages/aarch64_cortex-a53/luci/packages.adb
+$BASE/packages/aarch64_cortex-a53/routing/packages.adb
+$BASE/packages/aarch64_cortex-a53/telephony/packages.adb
+EOF
+exit 0
