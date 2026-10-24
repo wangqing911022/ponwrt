@@ -1,0 +1,7 @@
+#!/bin/sh
+# Keep Argon as the default LuCI theme after all other theme defaults.
+[ -d /www/luci-static/argon ] || exit 0
+uci -q set luci.themes.Argon=/luci-static/argon
+uci -q set luci.main.mediaurlbase=/luci-static/argon
+uci -q commit luci
+exit 0
