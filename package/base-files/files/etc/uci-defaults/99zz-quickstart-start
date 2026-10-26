@@ -1,0 +1,7 @@
+#!/bin/sh
+# Enable the QuickStart backend so the homepage plugin is available after boot.
+[ -x /etc/init.d/quickstart ] || exit 0
+mkdir -p /var/run/quickstart
+/etc/init.d/quickstart enable
+/etc/init.d/quickstart start
+exit 0
