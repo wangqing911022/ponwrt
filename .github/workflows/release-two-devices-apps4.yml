@@ -107,6 +107,312 @@ jobs:
             package/custom/luci-app-homebox
           sed -i 's|LUCI_DEPENDS:=+homebox|LUCI_DEPENDS:=+homebox +luci-compat|' \
             package/custom/luci-app-homebox/Makefile
+          cat > package/custom/luci-app-homebox/luasrc/model/cbi/homebox.lua <<'EOF'
+
+          local m, s
+
+          m = Map("homebox", translate("Homebox"), translate("Homebox is a tool for local network speed testing"))
+
+          m:section(SimpleSection).template = "homebox_status"
+
+          s=m:section(TypedSection, "homebox", translate("Global Settings"))
+          s.addremove=false
+          s.anonymous=true
+
+          s:option(Flag, "enabled", translate("Enable")).rmempty=false
+
+          function m.on_after_commit(self)
+          	luci.sys.call("/etc/init.d/homebox restart >/dev/null 2>&1")
+          end
+
+          return m
+          EOF
+
+          # iStoreOS QuickStart homepage and Go backend.
+          git clone --depth 1 -b main https://github.com/linkease/nas-packages-luci.git \
+            /tmp/nas-packages-luci-src
+          cp -a /tmp/nas-packages-luci-src/luci/luci-app-quickstart \
+            package/custom/luci-app-quickstart
+          git clone --depth 1 -b master https://github.com/linkease/nas-packages.git \
+            /tmp/nas-packages-src
+          cp -a /tmp/nas-packages-src/network/services/quickstart \
+            package/custom/quickstart
+          sed -i 's|procd_open_instance|mkdir -p /var/run/quickstart\n\tprocd_open_instance|' \
+            package/custom/quickstart/files/quickstart.init
+
+          # Runtime defaults.
+          chmod 0755 package/base-files/files/etc/uci-defaults/99-pku-repo
+          chmod 0755 package/base-files/files/etc/uci-defaults/99zz-argon-default
+          chmod 0755 package/base-files/files/etc/uci-defaults/99-disable-flow-offload
+          chmod 0755 package/base-files/files/etc/uci-defaults/99zz-timezone-shanghai
+          chmod 0755 package/base-files/files/etc/uci-defaults/99zz-quickstart-start
+          chmod 0755 package/base-files/files/etc/init.d/homebox
+
+      - name: Load repository signing key
+        env:
+          PONWRT_APK_PRIVATE_KEY: ${{ secrets.PONWRT_APK_PRIVATE_KEY }}
+        run: |
+          if [ -n "$PONWRT_APK_PRIVATE_KEY" ]; then
+            umask 077
+            printf '%s\n' "$PONWRT_APK_PRIVATE_KEY" > private-key.pem
+            openssl ec -in private-key.pem -pubout -out public-key.pem
+          fi
+
+      - name: Configure an7581 (two devices, apps4)
+        run: |
+          ./scripts/kconfig.pl + \
+            "configs/an7581.config" \
+            configs/release.two-devices-apps4.config > .config
+          ./scripts/kconfig.pl + .config configs/two-devices.config > .config.new
+          mv .config.new .config
+          make defconfig
+
+      - name: Verify required packages and devices
+        run: |
+          set -e
+          for pkg in luci-app-store luci-app-openclash luci-theme-argon \
+            luci-app-passwall luci-app-airoha-npu luci-i18n-airoha-npu-zh-cn luci-app-netspeedtest \
+            luci-app-ttyd luci-app-taskplan luci-app-poweroffdevice \
+            luci-app-wrtbwmon wrtbwmon luci-app-adbyby-plus adbyby \
+            homebox luci-app-homebox quickstart luci-app-quickstart; do
+            grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config || { echo "ERROR: ${pkg} is not selected"; exit 1; }
+          done
+
+          for pkg in luci-theme-aurora luci-app-aurora-config luci-theme-alpha \
+            luci-app-alpha-config luci-theme-liquid; do
+            if grep -q "^CONFIG_PACKAGE_${pkg}=y$" .config; then
+              echo "ERROR: ${pkg} should be removed"; exit 1
+            fi
+          done
+
+          for dep in dnsmasq-full bash curl ca-bundle ip-full ruby ruby-yaml kmod-tun unzip luci-compat xz-utils \
+            flock coreutils-timeout ucode-mod-math \
+            chinadns-ng dns2socks microsocks tcping lyaml lua libuci-lua luci-lib-jsonc \
+            coreutils-base64 coreutils-nohup resolveip iperf3 librespeed-go ca-certificates \
+            ipset ttyd luci-lib-taskd taskd \
+            shadow-utils shadow-useradd block-mount lsblk e2fsprogs parted \
+            smartmontools smartd smartmontools-drivedb mdadm \
+            zoneinfo-core zoneinfo-asia; do
+            grep -Eq "^CONFIG_PACKAGE_${dep}=[ym]$" .config || { echo "ERROR: dependency ${dep} is not selected"; exit 1; }
+          done
+          grep -Eq '^CONFIG_PACKAGE_iptables(-[a-z0-9-]+)?=y$' .config || { echo "ERROR: iptables provider is not selected"; exit 1; }
+          if grep -q '^CONFIG_PACKAGE_luci-app-upnp=y$' .config; then
+            echo "ERROR: luci-app-upnp should be disabled"; exit 1
+          fi
+          if grep -q '^CONFIG_PACKAGE_luci-app-statistics=y$' .config; then
+            echo "ERROR: luci-app-statistics should be disabled"; exit 1
+          fi
+          if ! grep -q '^CONFIG_VERSION_REPO=.*mirrors.pku.edu.cn' .config; then
+            echo "WARNING: CONFIG_VERSION_REPO not applied; 99-pku-repo will set PKU mirror on first boot"
+          fi
+          grep -Eq '^CONFIG_PACKAGE_(wget|wget-ssl)=y$' .config || { echo "ERROR: wget provider is not selected"; exit 1; }
+          grep -q '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_nokia_xg-040g-md-ubi=y$' .config
+          grep -q '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_znxt_zn504xg-d=y$' .config
+          count=$(grep -c '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y$' .config || true)
+          [ "$count" -eq 2 ] || { echo "ERROR: expected 2 devices, got $count"; grep '^CONFIG_TARGET_DEVICE_airoha_an7581_DEVICE_.*=y$' .config; exit 1; }
+
+          test -f package/custom/luci-theme-argon/Makefile
+          grep -q '^PKG_VERSION:=3\.' package/custom/luci-theme-argon/Makefile
+          test -f package/custom/luci-app-airoha-npu/Makefile
+          grep -q '^PKG_VERSION:=1\.' package/custom/luci-app-airoha-npu/Makefile
+          test -f package/custom/luci-app-netspeedtest/Makefile
+          test -f package/custom/luci-app-taskplan-src/luci-app-taskplan/Makefile
+          grep -q '^PKG_VERSION:=3\.' package/custom/luci-app-taskplan-src/luci-app-taskplan/Makefile
+          test -f package/custom/luci-app-poweroffdevice-src/luci-app-poweroffdevice/Makefile
+          test -f package/custom/luci-app-wrtbwmon-src/luci-app-wrtbwmon/Makefile
+          test -f package/custom/wrtbwmon-src/wrtbwmon/Makefile
+          test -f package/custom/luci-app-adbyby-plus/Makefile
+          test -f package/custom/adbyby/Makefile
+          test -f package/custom/homebox/Makefile
+          grep -q '^PKG_VERSION:=1\.0\.1$' package/custom/homebox/Makefile
+          test -f package/custom/luci-app-homebox/Makefile
+          grep -q 'on_after_commit' package/custom/luci-app-homebox/luasrc/model/cbi/homebox.lua
+          awk '/function m.on_after_commit/{f=1} /^return m$/{if(f) ok=1} END{exit !ok}' \
+            package/custom/luci-app-homebox/luasrc/model/cbi/homebox.lua
+          test -f package/custom/quickstart/Makefile
+          grep -q '^PKG_VERSION:=0\.13\.0$' package/custom/quickstart/Makefile
+          test -f package/custom/luci-app-quickstart/Makefile
+          grep -q '+quickstart' package/custom/luci-app-quickstart/Makefile
+          test -d package/feeds/passwall_luci/luci-app-passwall
+          test -d package/feeds/passwall_packages/chinadns-ng
+          test -d package/feeds/istore/luci-app-store
+          test -f package/base-files/files/etc/uci-defaults/99-pku-repo
+          test -f package/base-files/files/etc/uci-defaults/99zz-argon-default
+          test -f package/base-files/files/etc/uci-defaults/99-disable-flow-offload
+          test -f package/base-files/files/etc/uci-defaults/99zz-timezone-shanghai
+          test -f package/base-files/files/etc/uci-defaults/99zz-quickstart-start
+          test -f package/base-files/files/etc/init.d/homebox
+          test -f package/base-files/files/etc/config/homebox
+
+      - name: Download sources
+        run: make download -j"$(nproc)"
+
+      - name: Build an7581
+        run: make -j"$(nproc)"
+
+      - name: Pack an7581
+        run: |
+          mkdir release
+          DATE=$(date -u +%Y%m%d)
+          tar --zstd -cf "release/ponwrt-an7581-${DATE}.tar.zst" \
+            -C bin/targets/airoha an7581
+
+      - name: Upload an7581
+        uses: actions/upload-artifact@v4
+        with:
+          name: ponwrt-an7581
+          path: release/*.tar.zst
+          if-no-files-found: error
+          retention-days: 7
+
+  release:
+    name: Create release
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download firmware archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: ponwrt-*
+          path: release
+          merge-multiple: true
+
+      - name: Create checksums
+        working-directory: release
+        run: sha256sum *.tar.zst > sha256sums
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          PRERELEASE: ${{ inputs.prerelease }}
+        run: |
+          TITLE_DATE=$(date -u +%Y-%m-%d)
+          args=(
+            "$RELEASE_TAG"
+            release/*.tar.zst
+            release/sha256sums
+            --repo "$GITHUB_REPOSITORY"
+            --target "$GITHUB_SHA"
+            --title "PonWrt $RELEASE_TAG ($TITLE_DATE)"
+            --generate-notes
+          )
+          if [ "$PRERELEASE" = true ]; then
+            args+=(--prerelease)
+          fi
+          gh release create "${args[@]}"
+name: Release Two Devices Apps4
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag
+        required: true
+        type: string
+      prerelease:
+        description: Mark as prerelease
+        required: true
+        default: true
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ inputs.tag }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build an7581
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    environment: release
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Free build space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc
+          sudo apt-get clean
+
+      - name: Install build dependencies
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            asciidoc autoconf automake autopoint binutils bison build-essential \
+            bzip2 ccache clang cmake cpio curl device-tree-compiler flex gawk \
+            gettext git g++-multilib gcc-multilib gperf help2man intltool \
+            libelf-dev libglib2.0-dev libgmp3-dev libltdl-dev libmpc-dev \
+            libmpfr-dev libncurses-dev libpython3-dev libreadline-dev libssl-dev \
+            libtool libyaml-dev lld llvm ninja-build p7zip-full patch pkgconf \
+            python3 python3-docutils python3-pip python3-ply python3-pyelftools \
+            qemu-utils re2c rsync scons squashfs-tools subversion swig texinfo \
+            uglifyjs unzip wget xmlto xxd zlib1g-dev zstd
+
+      - name: Cache downloads
+        uses: actions/cache@v4
+        with:
+          path: dl
+          key: ponwrt-dl-an7581-apps4-${{ hashFiles('configs/*.config', 'configs/*.conf') }}
+          restore-keys: |
+            ponwrt-dl-an7581-
+
+      - name: Install feeds and custom packages
+        run: |
+          cp configs/feeds.aurora-passwall.conf feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+          # Drop feed copies that are replaced by pinned custom sources.
+          rm -rf package/feeds/luci/luci-theme-argon package/feeds/luci/luci-app-argon-config
+          rm -rf package/feeds/luci/luci-app-airoha-npu package/feeds/luci/luci-app-netspeedtest
+          rm -rf package/feeds/luci/luci-app-passwall
+          rm -rf package/feeds/luci/luci-app-taskplan package/feeds/luci/luci-app-poweroffdevice
+          rm -rf package/feeds/luci/luci-app-wrtbwmon package/feeds/packages/wrtbwmon
+          rm -rf package/feeds/luci/luci-app-adbyby-plus package/feeds/packages/adbyby
+          rm -rf package/feeds/istoreos_theme package/feeds/istoreos_argon
+
+          mkdir -p package/custom
+
+          # Argon 3 latest master (default theme).
+          git clone --depth 1 -b master https://github.com/jerrykuku/luci-theme-argon.git \
+            package/custom/luci-theme-argon
+
+          # Existing applications.
+          git clone --depth 1 -b main https://github.com/luanmuc/luci-app-airoha-npu.git \
+            package/custom/luci-app-airoha-npu
+          git clone --depth 1 -b master https://github.com/muink/luci-app-netspeedtest.git \
+            package/custom/luci-app-netspeedtest
+          sed -i '1i PKG_VERSION:=5.0.0' package/custom/luci-app-netspeedtest/Makefile
+          git clone --depth 1 -b main https://github.com/sirpdboy/luci-app-taskplan.git \
+            package/custom/luci-app-taskplan-src
+          git clone --depth 1 -b master https://github.com/sirpdboy/luci-app-poweroffdevice.git \
+            package/custom/luci-app-poweroffdevice-src
+          git clone --depth 1 -b master https://github.com/brvphoenix/luci-app-wrtbwmon.git \
+            package/custom/luci-app-wrtbwmon-src
+          git clone --depth 1 -b master https://github.com/brvphoenix/wrtbwmon.git \
+            package/custom/wrtbwmon-src
+          git clone --depth 1 -b master https://github.com/tcsr200722/luci-app-adbyby-plus.git \
+            package/custom/luci-app-adbyby-plus
+          git clone --depth 1 -b master https://github.com/kongfl888/no-adbyby.git \
+            package/custom/adbyby
+
+          # Homebox v1.0.1 binary and LuCI app.
+          git clone --depth 1 -b main https://github.com/sirpdboy/netspeedtest.git \
+            /tmp/netspeedtest-src
+          cp -a /tmp/netspeedtest-src/homebox package/custom/homebox
+          git clone --depth 1 -b main https://github.com/selfcan/luci-app-homebox.git \
+            package/custom/luci-app-homebox
+          sed -i 's|LUCI_DEPENDS:=+homebox|LUCI_DEPENDS:=+homebox +luci-compat|' \
+            package/custom/luci-app-homebox/Makefile
           cat >> package/custom/luci-app-homebox/luasrc/model/cbi/homebox.lua <<'EOF'
 
           function m.on_after_commit(self)
