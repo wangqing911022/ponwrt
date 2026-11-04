@@ -1,0 +1,33 @@
+name: HG5585F CU Config Probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install feeds
+        run: |
+          cp configs/feeds.aurora-passwall.conf feeds.conf.default
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+      - name: Configure and print
+        run: |
+          set +e
+          ./scripts/kconfig.pl + configs/an7581.config configs/release.two-devices-apps4.config > .config
+          ./scripts/kconfig.pl + .config configs/three-devices.config > .config.new
+          mv .config.new .config
+          make defconfig
+          echo '--- selected devices ---'
+          grep '^CONFIG_TARGET_DEVICE_.*=y$' .config
+          echo '--- dts files ---'
+          ls -l target/linux/airoha/dts/*hg5585f*
+          echo '--- wifi nodes ---'
+          grep -n 'mt76\|wlan\|eeprom' target/linux/airoha/dts/an7581-fiberhome-hg5585f-common.dtsi | head -30
+          echo '--- image profile ---'
+          grep -n 'hg5585f\|mt7916' target/linux/airoha/image/an7581.mk
